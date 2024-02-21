@@ -1,0 +1,260 @@
+---
+title: "Mini Project code"
+output: html_document
+date: "2024-02-13"
+---
+
+```{r setup, include=FALSE}
+rm(list=ls(all=TRUE)) #start with an empty environment
+setwd("C:/Users/stavroula stamoulis/Downloads") #set the working directory
+#Load all the packages needed
+require(usdm)
+require(psych)
+require(vegan)
+require(factoextra)
+require(ggpubr)
+require(ggeffects)
+library(terra)
+library(sf)
+library(vegan)
+library(ggplot2)
+library(tidyverse)
+library(dplyr)
+library(sjPlot)
+
+
+```
+
+#Download the datasets
+The datasets used are composed by Keck et al., 2014. They are available at: http://doi.org/10.5061/dryad.738d2. 
+ The Riparian Buffer data will not be used to simplify the analysis. For Land Use, only the Land_Use_Full.csv file is going to be used. I downloaded: 1. Presence-absence data of 131 species, across 210 localities ("TVAFishData_PLOS.csv"), 2. Land Use variables (15 in total) for each locality ("LandUse_Full_PLOS.csv") and 3. Geological/spatial variables (32 in total) for each locality ("LocalityTraits_PLOS.csv"). 
+```{r}
+#Load the datasets
+Fish <- read.csv("TVAFishData_PLOS.csv")
+LandUseFull <- read.csv("LandUse_Full_PLOS.csv")
+LocTraits<- read.csv("LocalityTraits_PLOS (1).csv")
+#Merge all the datasets to create a complete one
+Full <- merge(Fish, LandUseFull, by="Locality", all=TRUE)
+Full<- merge(Full, LocTraits, by="Locality", all=TRUE)
+```
+
+#Explore which of the variables may affect community composition. To do that perform PCoA analysis for the 210 localities.
+```{r}
+#Get rid of non valid columns for the calculation of the dissimilarity matrix
+Fish1 <- dplyr::select(Fish, -c("Lat", "Long", "TVA.ID"))
+
+#Create a dissimilarity matrix with Jaccard method because I have binary data for the sites (presence and absence of species)
+Jac  <- vegdist(Fish1[,-1], method="jaccard", binary=FALSE)
+
+#Do a PCoA analysis to assess the community composition
+#Select to produce only 8 component axes because only the first two will be used to explore the patterns graphically
+pcoa <- cmdscale(Jac, k=8, eig=TRUE)
+#Extract the scores 
+pcoa_axes <- pcoa$points
+
+#Rename the columns of the scores as components (PCoA1, PCoA2 etc)
+colnames(pcoa_axes) <- paste0('PCoA', 1:8)
+
+# Convert the pcoa axis values to a data frame and label by site
+pcoa_axes_df <- data.frame(pcoa_axes)
+
+#Create a column with the names of the Localities in order to merge the two dataframes
+pcoa_axes_df$Locality <- Full$Locality
+
+# Merge the axes and the complete dataset to explore how the variables can affect community composition
+Localities <- merge(Full, pcoa_axes_df, by='Locality')
+
+#Create a plot of PCoA1 and PCoA2 using  Elevation as colouring. Adjust the size of the points by size= . I also want to preserve the Elevation in the legend but not the size of the points. For this I use  [scale_size_continuous(guide = FALSE)]. 
+ggplot(Localities, aes(PCoA1, PCoA2)) +
+  geom_point(aes(colour = Elevation, size = 2)) + 
+  scale_colour_gradientn(colors = hcl.colors(20), name = "Elevation (m)") + 
+  scale_size_continuous(guide = FALSE) + 
+  theme_classic()
+
+```
+```{r}
+#Create a loop to test graphically each environmental variable of LandUseFull dataset (now included in Localities dataset) for a possible relationship with community composition
+for (i in 139:153){
+  par(mfrow=c(3,5))
+  g1 <-ggplot(Localities, aes(PCoA1, PCoA2)) +
+    geom_point(aes(colour = Localities[,i], cex=2)) + 
+    scale_colour_gradientn(colors=hcl.colors(20)) + 
+    theme_classic()
+print(g1)
+}
+##Conclusion: DecForest has a pattern  
+```
+
+```{r}
+#Create a loop to test graphically each environmental variable of LocTraits dataset (now included in Localities dataset) for a possible relationship with community composition
+for (i in 158:189){
+g2 <-ggplot(Localities, aes(PCoA1, PCoA2)) +
+    geom_point(aes(colour = Localities[,i], cex=2)) + 
+    scale_colour_gradientn(colors=hcl.colors(20)) + 
+    theme_classic()
+print(g2)
+}
+##Conclusion: Elevation and Limestone have patterns
+```
+
+```{r}
+#Final Important plots
+ggplot(Localities, aes(PCoA1, PCoA2)) +
+  geom_point(aes(colour = Elevation, size = 2)) + 
+  scale_colour_gradientn(colors = hcl.colors(20), name = "Elevation (m)") + 
+  scale_size_continuous(guide = FALSE) + 
+  theme_classic()
+ ggplot(Localities, aes(PCoA1, PCoA2)) +
+  geom_point(aes(colour = Limestone, size = 2)) + 
+  scale_colour_gradientn(colors = hcl.colors(20), name = "Limestone (1-0)") + 
+  scale_size_continuous(guide = FALSE) + 
+  theme_classic()
+ ggplot(Localities, aes(PCoA1, PCoA2)) +
+  geom_point(aes(colour = DecForest, size = 2)) + 
+  scale_colour_gradientn(colors = hcl.colors(20), name = "Deciduous Forest (% cover)") + 
+  scale_size_continuous(guide = FALSE) + 
+  theme_classic()
+```
+
+```{r}
+#To test how much variation is explained by the first 8 components I have to extract the eigenvalues
+eig <- pcoa$eig[pcoa$eig >0] #Drop the negative ones because they confuse the plots
+
+#Make plots with eigenvalues to show how much variation each of the components explain
+par(mfrow=c(1,2)) #change the number of the plots shown 
+barplot(eig / sum(eig), main='Axis variation')
+
+#Make a plot including the cumulative sum of eigenvalues. This describes the cumulative variation explained when I include more components
+barplot(cumsum(eig)/ sum(eig), main='Cumulative variation')
+
+# Print the percentage variation of the first 8 
+head(sprintf('%0.2f%%', (eig / sum(eig)) * 100), n=8)
+```
+
+#Fit the model
+I have picked 3 important environmental variables for community composition and I suspect that those may affect species richness as well. I will fit a model with species richness as a response variable and Elevation, Limestone and DecForest as explanatory variables.
+```{r}
+#Calculate Total Species Richness for each site
+##Because I have only presence-absence data in the form of 1-0, I can sum all the presences to get the total number of species for each locality. TO do that I will get the sum of all the columns for each row (locality). I exclude the first column which is the names of the localities
+Fish1$Richness <- rowSums(Fish1[,-1]) 
+#Merge the Species Richness and the complete dataset
+Full <- merge(Fish1, Full, by="Locality", all=TRUE)
+#Fit a poisson Generalised Linear Model because Richness is a count type of data. I z standarise Elevation and DecForest to have more homogenous variances. Limestone is a factorial variable.
+M1 <- glm(Richness~ scale(Elevation) + scale(DecForest) + as.factor(Limestone), data=Full, family="poisson")
+summary(M1) # The model is clearly overdispersed. I do not want to include more fixed or random factors to make it more complex because I want to test only these variables.   
+sum(Full$Elevation==0) #no zeros in the original data
+sum(Full$DecForest==0) #only one zero
+
+#Fit a negative binomial model to fix overdispersion
+M2 <-glm.nb(Richness~  scale(Elevation) + scale(DecForest) + as.factor(Limestone), data = Full)
+summary(M2)
+plot(M2) # This is to validate the model. I can see that we do not have a lot of heteroscedacity or outliers. The Q-Q plot is ok
+##Dispersion parameter is fine (equals to 1.03). This is my final model!
+```
+
+#Plot the model and create a table with results for the model
+```{r}
+#Because only Elevation and DecForest were statistically significant, I will plot the model only for those variables
+##First make a plot for Elevation. The points are from the original data but the fitted line is calculated by the model (the predicted species richness for each Elevation value)
+library(sjPlot)
+set_theme(base=ggplot2::theme_classic()) #Set the theme
+p1 <-plot_model(M2, type = "pred", terms = "Elevation",show.data=TRUE,axis.title=c("Elevation (m)","Species Richness"), colors="red") #change the color of theline and labels of the axes
+p1
+p2 <-plot_model(M2, type = "pred", terms = "DecForest",show.data=TRUE,axis.title=c("Deciduous Forest (% cover)","Species Richness"), colors="green")
+p2
+
+#Use the command tab_model() to create a table with predictors, Incidence Rate Ratios (the n-fold change), Confidence Intervals(CI) and p values
+tab_model(M2, dv.labels="Species Richness") # Write the name of the response variable
+
+```
+
+Up to this point it was the basic analysis of my report. From this point on, I include the code I used to make a map of the localities and to check whether there is spatial correlation between them.
+```{r}
+#Create a map using the geometries of the localities
+# First check our coordinates
+min(Full$Long.x) 
+max(Full$Long.x)#There is a typo mistake here cause all of the points should be in the same place 
+# Fix the typo
+Pos <- Full$Long.x>0
+Full$Long.x[Pos] <- Full$Long.x[Pos] * -1
+max(Full$Long.x)
+sum(Full$Long.x>0) #The typo is fixed!
+#Then, create an sf object with lognitude and latitude
+Y <-st_as_sf(Full, coords=c('Long.x', 'Lat.x'))
+
+# Assign a coordinate reference system. WGS 84 (4326) is the coordinate system in which localities data were recorded 
+st_crs(Y) <- 4326
+
+##Load an etopo raster, cropped for my specific area of interest. I downloaded and used ETOPO_2022 Hillshade (Bedrock; 15 arcseconds)available at: https://www.ncei.noaa.gov/maps/grid-extract/
+library(raster)
+etopo_new <- raster('exportImage (4).tif')
+
+#Plot it to see what we have
+plot(etopo_new, plg=list(ext=c(190, 210, -90, 90)))
+
+#Change the colours
+##Define a sequence of breakpoints along the elevation gradient from 
+###Find the minimum and maximum elevations (-100 or +100 is used to make the results simpler)
+#mi <- cellStats(etopo_new, stat="min")-100 
+ma <- cellStats(etopo_new, stat="max")+100
+
+# Make break points sequence for below sea level. I WILL NOT USE THE SEA BELOW PART because we do not have sea at the cropped picture. Nevertheless,  I want to give the full code of that is used to create maps with sea inside.
+#s1 <- seq(from=mi, to=0, by=0 - mi / 10) #Divide by a number to create a small sequence of break points for below the sea
+#s1 #see what we have
+
+# Break points sequence for above sea level
+s2 <- seq(from=0, to=ma, by=ma / 50) # More in order to be more accurate  
+
+# Round the break points, so that they are meaningful
+#s1 <- round(s1)
+s2 <- round(s2)
+
+#s3 <- c(s1, s2[-1]) #bind together the 2 sequences of breaking points. I remove zero from  the second sequence not to double count
+#s3
+
+#See the length of s1 and s2
+#length(s1)
+length(s2)
+# Apply to breaks, rounding the minimum and maximum number of the sequence s3. By=10 is used to create how many breakpoints (change of colour) I want. 
+#breaks <- seq(-85, 300, by=10)
+#breaks #see the breaks
+
+# Define 50 land colours for use above sea level (0m)
+land_cols  <- terrain.colors(50) 
+
+# Generate a colour palette function for sea colours. I will not use that for our area, but if the cropped area had sea inside this would be used. It is again a generally applicable code.
+#sea_pal <- colorRampPalette(c('darkslateblue', 'steelblue', 'paleturquoise'))
+
+# Create 40 sea colours for use below sea level
+#sea_cols <- sea_pal(11) 
+
+#Replot using the land colours
+plot(etopo_new, col=terrain.colors(50), breaks=s2, xlim=c(-90,-80))
+#Add the points for the localities
+plot(st_geometry(Y), add=TRUE, col='darkcyan', pch=19, cex=1) 
+
+```
+
+```{r}
+#Check for spatial correlation among the localities
+sf_use_s2(TRUE) #I do that so that we can get the distances as meters and not degrees
+# I have an sf file from above called Y
+## I use st_distance to get a matrix of distances between all the localities (210x 210 matrix)
+distances <-st_distance(Y)
+distances #View that
+distances <- as.matrix(distances) #store as matrix
+distances <-as.data.frame(distances) #store as dataframe
+str(distances) #confirm we get what we wanted
+distances$Means <- rowMeans(distances) #Make a mean for every locality
+max(distances$Means) #See the greatest mean
+min(distances$Means) #See the lowest mean
+
+#Extract only the means column
+Mean.d <-distances[,211] 
+#Make a new dataframe with that and a column for Localities
+new <- as.data.frame(Mean.d)
+new$Locality <- Full$Locality
+#Merge the Full dataframe and the new dataframe
+Full <- merge(new, Full, by="Locality", all=TRUE)
+mean(Full$Mean.d)/1000 # The Mean distance between the localities is 136.63 km so we do not need to test more for spatial correlation
+```
